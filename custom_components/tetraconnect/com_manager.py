@@ -1,4 +1,4 @@
-# custom_components/tetraconnectom_manager.py
+"""COM manager for tetraconnect integration."""
 
 import asyncio
 import contextlib
@@ -9,12 +9,13 @@ import serial_asyncio
 
 from .const import (
     MAX_RETRY_ATTEMPTS,
+    SLEEP_TIME_AFTER_FAILED_RECONNECT,
     SLEEP_TIME_CONNECTION_CHECK,
     SLEEP_TIME_RETRY,
     TETRA_DEFAULTS,
 )
+from .event_handler import fire_connection_changed
 from .helpers import TetraconnectHelpers
-from .motorola import Motorola
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,14 +32,36 @@ class COMManager:
         self.protocol = None
         self._tetra_defaults = TETRA_DEFAULTS.copy()
         self._connection_check_task = None
+        self._failed_reconnect_count = 0  # Track consecutive failed reconnect attempts
 
         self.helpers = TetraconnectHelpers(coordinator)
 
+    def set_connection_status(self, status: int, reason: str = "") -> None:
+        """Centralized connection status update.
+
+        Args:
+            status: Status code (1=connected, 2=reconnecting, 3=disconnected)
+            reason: Optional reason for the status change
+        """
+        status_mapping = {
+            1: "connected",
+            2: "reconnecting",
+            3: "disconnected",
+        }
+        status_text = status_mapping.get(status, "unknown")
+        if reason:
+            _LOGGER.info("Connection status: %s (%s)", status_text, reason)
+        else:
+            _LOGGER.info("Connection status: %s", status_text)
+
+        _LOGGER.debug("Calling helpers.update_connection_status(%d)", status)
+        self.helpers.update_connection_status(status)
+        _LOGGER.debug("Calling fire_connection_changed with status: %s", status_text)
+        fire_connection_changed(self.coordinator.hass, status_text)
+
     async def serial_initialize(self, hass):
         """Start monitoring and connection loop."""
-        self._connection_check_task = hass.loop.create_task(
-            self._periodic_connection_check()
-        )
+        self._connection_check_task = hass.loop.create_task(self._watchdog())
 
     async def serial_stop(self):
         """Stop connection and monitoring."""
@@ -58,6 +81,9 @@ class COMManager:
         as watchdog for the serial connection.
 
         """
+
+        self.set_connection_status(2, f"connecting to {self.com_port}")
+
         loop = asyncio.get_running_loop()
         (
             self.transport,
@@ -68,57 +94,91 @@ class COMManager:
             self.com_port,
             baudrate=self.baudrate,
         )
-        self.helpers.update_connection_status(1)
-        _LOGGER.info("Serial connection established on %s", self.com_port)
+        self.set_connection_status(1, f"established on {self.com_port}")
         # await self._tetra_initialize()
 
-    async def _periodic_connection_check(self):
-        """Continuously ensure serial connection.
+    async def _watchdog(self):
+        """Continuously ensure serial connection with exponential backoff.
 
         Permanently checking the serial connection every SLEEP_TIME_CONNECTION_CHECK seconds.
-        If the connection is lost, it will try to reconnect.
-        Reconnect attempts are made every SLEEP_TIME_RETRY seconds, up to MAX_RETRY_ATTEMPTS times.
+        If the connection is lost, it will try to reconnect with exponential backoff:
+        - First MAX_RETRY_ATTEMPTS attempts with SLEEP_TIME_RETRY between retries
+        - If all attempts fail, wait SLEEP_TIME_AFTER_FAILED_RECONNECT before trying again
+        - Resets counter on successful connection
 
         """
         while True:
             if self.transport is None or self.transport.is_closing():
-                self.helpers.update_connection_status(2)
-                if MAX_RETRY_ATTEMPTS == 0:
-                    await self._retry_connect_infinite()
+                self.set_connection_status(2, "detected, attempting to reconnect")
+
+                attempt = 1
+                while attempt <= MAX_RETRY_ATTEMPTS:
+                    try:
+                        await self._connect()
+                        if self.transport and not self.transport.is_closing():
+                            self.set_connection_status(1, "connected successfully")
+                            self._failed_reconnect_count = 0  # Reset counter on success
+                            await self.tetra_initialize()
+                            break
+                    except (
+                        serial.SerialException,
+                        OSError,
+                        ValueError,
+                        asyncio.CancelledError,
+                    ) as e:
+                        _LOGGER.warning(
+                            "Connection attempt %d/%d failed: %s",
+                            attempt,
+                            MAX_RETRY_ATTEMPTS,
+                            e,
+                        )
+
+                    attempt += 1
+
+                    if attempt > MAX_RETRY_ATTEMPTS:
+                        # ensure that serial connection is closed
+                        if self.transport:
+                            self.transport.close()
+                            self.transport = None
+                            self.protocol = None
+
+                        # Increment failed reconnect counter for exponential backoff
+                        self._failed_reconnect_count += 1
+
+                        self.set_connection_status(
+                            3,
+                            f"reconnect failed after {MAX_RETRY_ATTEMPTS} attempts (backoff #{self._failed_reconnect_count})",
+                        )
+                        _LOGGER.error(
+                            "Reconnect failed after %d attempts and %d seconds. "
+                            "Entering exponential backoff (attempt #%d). "
+                            "Please check the connection.",
+                            MAX_RETRY_ATTEMPTS,
+                            MAX_RETRY_ATTEMPTS * SLEEP_TIME_RETRY,
+                            self._failed_reconnect_count,
+                        )
+                        break
+
+                    await asyncio.sleep(SLEEP_TIME_RETRY)
+
+                # After failed reconnect attempts, use exponential backoff
+                if self._failed_reconnect_count > 0:
+                    backoff_time = (
+                        SLEEP_TIME_AFTER_FAILED_RECONNECT * self._failed_reconnect_count
+                    )
+                    _LOGGER.info(
+                        "Waiting %d seconds before next reconnect attempt (backoff #%d)",
+                        backoff_time,
+                        self._failed_reconnect_count,
+                    )
+                    await asyncio.sleep(backoff_time)
                 else:
-                    await self._retry_connect_limited()
-                    break
-            await asyncio.sleep(SLEEP_TIME_CONNECTION_CHECK)
-
-    async def _retry_connect_infinite(self):
-        """Retry connection infinitely until successful."""
-        attempt = 0
-        while True:
-            try:
-                await self._connect()
-                if self.transport and not self.transport.is_closing():
-                    break
-            except (serial.SerialException, OSError, ValueError) as e:
-                _LOGGER.warning("Connection attempt %d failed: %s", attempt, e)
-            attempt += 1
-            await asyncio.sleep(SLEEP_TIME_RETRY)
-
-    async def _retry_connect_limited(self):
-        """Retry connection up to MAX_RETRY_ATTEMPTS times."""
-        for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
-            try:
-                await self._connect()
-                if self.transport and not self.transport.is_closing():
-                    return
-            except (serial.SerialException, OSError, ValueError) as e:
-                _LOGGER.warning("Connection attempt %d failed: %s", attempt, e)
-            await asyncio.sleep(SLEEP_TIME_RETRY)
-        self.helpers.update_connection_status(3)
-        _LOGGER.error(
-            "Abort reconnecting after %s retries and %s seconds, please check the connection",
-            MAX_RETRY_ATTEMPTS,
-            MAX_RETRY_ATTEMPTS * SLEEP_TIME_RETRY,
-        )
+                    # Normal monitoring interval
+                    await asyncio.sleep(SLEEP_TIME_CONNECTION_CHECK)
+            else:
+                # Connection is active, reset backoff counter
+                self._failed_reconnect_count = 0
+                await asyncio.sleep(SLEEP_TIME_CONNECTION_CHECK)
 
     async def tetra_initialize(self):
         """Initialize TETRA device for specific CTSP-Services.
@@ -133,12 +193,14 @@ class COMManager:
         """
         # these commands are standard TETRA commands, which every device should respond to
 
-        _LOGGER.info("##### Initializing TETRA services on %s #####", self.com_port)
+        _LOGGER.info(
+            "##### Start initializing TETRA services on %s #####", self.com_port
+        )
 
-        if not self.transport:
+        if not self.transport or not self.protocol:
             for _ in range(5):
                 await asyncio.sleep(0.2)
-                if self.transport:
+                if self.transport and self.protocol:
                     break
             else:
                 _LOGGER.warning(
@@ -146,7 +208,7 @@ class COMManager:
                 )
                 return
 
-        raw_data = {}
+        init_raw_data = {}
 
         # +CTSP=<service profile>, <service layer1>, [<service layer2>], [<AI mode>], [<link identifier>]
         service_commands = [
@@ -164,35 +226,38 @@ class COMManager:
             # "AT+CTSP=2,4\r\n",
         ]
 
-        for cmd in service_commands:
-            _LOGGER.debug("Sending service profile command: %s", cmd.strip())
-            if self.protocol is not None:
-                self.protocol.expect_response = True
-                self.protocol.response_future = (
-                    asyncio.get_running_loop().create_future()
-                )
+        # send commands and wait for responses
+        # a live connection does not mean a valid response on TETRA commands
+        # so we have to handle timeout errors and als ConfigEntryNotReady here
+        try:
+            self.protocol.expect_response = True
+            self.protocol.response_future = asyncio.get_running_loop().create_future()
+            for cmd in service_commands:
+                _LOGGER.debug("Sending service profile command: %s", cmd.strip())
                 self.transport.write(cmd.encode())
                 await asyncio.sleep(0.1)
-                _LOGGER.debug("Waiting for response to command: %s", cmd.strip())
+
                 try:
                     response = await asyncio.wait_for(
                         self.protocol.response_future, timeout=5
                     )
                     self.protocol.expect_response = False
-                    raw_data[cmd] = response
-                except asyncio.TimeoutError:
+                    init_raw_data[cmd] = response
+                    _LOGGER.debug(
+                        "Received response for command %s: %s", cmd.strip(), response
+                    )
+                except TimeoutError:
                     _LOGGER.error(
                         "Timeout while waiting for response to command: %s", cmd.strip()
                     )
-                    raw_data[cmd] = b"CME ERROR: response timeout"
-            else:
-                _LOGGER.warning(
-                    "Service profile not initialized, cannot send command: %s",
-                    cmd.strip(),
-                )
+                    init_raw_data[cmd] = b"CME ERROR: response timeout"
+                    continue
+        except asyncio.CancelledError:
+            _LOGGER.warning("Tetra initialization was cancelled by Home Assistant")
+            raise asyncio.CancelledError from None
 
         # check responses
-        for cmd, resp in raw_data.items():
+        for cmd, resp in init_raw_data.items():
             if resp != b"\r\nOK\r\n":
                 _LOGGER.warning(
                     "Service profile command '%s' failed with response: %s",
@@ -201,7 +266,7 @@ class COMManager:
                 )
 
         _LOGGER.info(
-            "##### TETRA services initialized successfully on %s #####", self.com_port
+            "##### Finished initializing TETRA services on %s #####", self.com_port
         )
 
 
@@ -212,8 +277,9 @@ class SerialHandler(asyncio.Protocol):
         """Initialize the data handler."""
         self.coordinator = coordinator
         self.raw_data = b""
+        self.decoded_data = None
+        self.remaining = b""
 
-        self.motorola = Motorola(coordinator)
         self.helpers = TetraconnectHelpers(coordinator)
         self.expect_response = False
         self.response_future = None
@@ -225,42 +291,18 @@ class SerialHandler(asyncio.Protocol):
 
     def data_received(self, data):
         """Handle incoming data."""
-        self.raw_data += data
+
         _LOGGER.debug("Raw data received: %s", data)
 
-        remaining = b""
-
-        # check if expected response is set
+        # check if expected response is set -> wait for response
         if self.expect_response:
             # Set result only if not already done
             if self.response_future is not None and not self.response_future.done():
                 self.response_future.set_result(data)
+
         else:
-            try:
-                if self.coordinator.manufacturer == "Motorola":
-                    remaining = self.motorola.data_handler(self.raw_data)
-
-                #################################################
-                ### Add other manufacturers data handler here ###
-                #################################################
-
-                else:
-                    _LOGGER.error(
-                        "Unsupported manufacturer: %s", self.coordinator.manufacturer
-                    )
-                    return
-
-                # put remaining data back into raw_data
-                self.raw_data = remaining
-                _LOGGER.debug("Remaining data after processing: %s", remaining)
-
-                # TODO
-                # add MQTT publish here and check if mqtt publishing or entity creation is needed
-
-            except (ValueError, TypeError, serial.SerialException) as e:
-                _LOGGER.error("Error processing incoming data: %s", e)
+            self.coordinator.handle_serial_data(data)
 
     def connection_lost(self, exc):
         """Handle the connection being lost."""
-        _LOGGER.warning("Serial connection lost: %s", exc)
-        self.helpers.update_connection_status(3)
+        self.coordinator.com_manager.set_connection_status(3, f"lost: {exc}")

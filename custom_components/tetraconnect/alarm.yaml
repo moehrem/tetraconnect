@@ -1,0 +1,47 @@
+alias: Alarm
+description: ""
+trigger:
+  - platform: state
+    entity_id:
+      - sensor.481708_open_alarms
+      - sensor.688026_open_alarms
+    not_from:
+      - unknown
+      - unavailable
+    not_to:
+      - unknown
+      - unavailable
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.to_state.state | float(0) > trigger.from_state.state | float(0) }}
+actions:
+  - action: switch.turn_on
+    metadata: {}
+    data: {}
+    target:
+      entity_id:
+        - switch.webio_093c06_output_1
+        - switch.webio_093c06_output_3
+  - action: input_boolean.turn_on
+    metadata: {}
+    data: {}
+    target:
+      entity_id:
+        - input_boolean.tv_damen
+        - input_boolean.tv_flur
+        - input_boolean.tv_halle_gross
+        - input_boolean.tv_herren
+    enabled: true
+  - delay:
+      hours: 0
+      minutes: 30
+      seconds: 0
+      milliseconds: 0
+  - action: switch.turn_off
+    metadata: {}
+    target:
+      entity_id: switch.webio_093c06_output_1
+    data: {}
+mode: restart

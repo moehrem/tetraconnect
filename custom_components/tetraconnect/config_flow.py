@@ -22,7 +22,6 @@ from .const import (
     VERSION,
     MINOR_VERSION,
     PATCH_VERSION,
-    MQTT_TOPIC_DEFAULT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,6 +37,11 @@ class TetraconnectConfigEntry:
     device_id: str = "unknown"
     model: str = "unknown"
     revision: str = "unknown"
+    # mqtt_enabled: bool = True
+    # mqtt_topic: str = MQTT_TOPIC_DEFAULT
+    # mqtt_broker: str = (
+    #     "localhost"  # Default broker address, can be overridden by user input
+    # )
 
 
 class TetraconnectConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -52,6 +56,10 @@ class TetraconnectConfigFlow(ConfigFlow, domain=DOMAIN):
         self.config_entry = TetraconnectConfigEntry()
         self.errors: dict[str, str] = {}
 
+        # self.mqtt_enabled = True
+        # self.mqtt_topic = MQTT_TOPIC_DEFAULT
+        # self.mqtt_broker = "localhost"
+
     async def async_step_user(
         self, user_input: dict[str, object] | None = None
     ) -> ConfigFlowResult:
@@ -65,6 +73,9 @@ class TetraconnectConfigFlow(ConfigFlow, domain=DOMAIN):
             self.config_entry.manufacturer = str(user_input["manufacturer"])
             self.config_entry.serial_port = str(user_input["serial_port"])
             self.config_entry.baudrate = int(str(user_input["baudrate"]))
+            # self.config_entry.mqtt_enabled = bool(user_input.get("mqtt_enabled"))
+            # self.config_entry.mqtt_topic = str(user_input.get("mqtt_topic"))
+            # self.config_entry.mqtt_broker = str(user_input.get("mqtt_broker"))
 
             try:
                 await self._request_device_data(self.config_entry)
@@ -80,6 +91,14 @@ class TetraconnectConfigFlow(ConfigFlow, domain=DOMAIN):
                 self.errors["base"] = "manufacturer_mismatch"
                 return await self._async_show_form_user()
 
+            # try:
+            #     if self.config_entry.mqtt_enabled:
+            #         await self._check_mqtt_broker(self.config_entry.mqtt_broker)
+            # except ValueError as e:
+            #     self.errors["base"] = "mqtt_broker_error"
+            #     _LOGGER.error("MQTT broker check failed: %s", e)
+            #     return await self._async_show_form_user()
+
             # create config entry
             return self.async_create_entry(
                 title=f"{self.config_entry.manufacturer} {self.config_entry.device_id}",
@@ -94,8 +113,6 @@ class TetraconnectConfigFlow(ConfigFlow, domain=DOMAIN):
         ports = await self.hass.async_add_executor_job(self._get_serial_ports)
 
         # Default values for first form display
-        mqtt_enabled = True
-        topic_default = MQTT_TOPIC_DEFAULT
         if hasattr(self, "hass") and hasattr(self.hass, "data"):
             user_input = getattr(self, "user_input", None)
         else:
@@ -104,8 +121,8 @@ class TetraconnectConfigFlow(ConfigFlow, domain=DOMAIN):
         # Try to get previous user input if available
         if user_input is None:
             user_input = {}
-        mqtt_enabled = user_input.get("mqtt", True)
-        topic_value = user_input.get("topic", topic_default)
+        # self.mqtt_enabled = user_input.get("mqtt_enabled", self.mqtt_enabled)
+        # self.mqtt_topic = user_input.get("topic", self.mqtt_topic)
 
         schema_dict = {
             vol.Required("manufacturer"): vol.In(MANUFACTURERS_LIST),
@@ -113,10 +130,12 @@ class TetraconnectConfigFlow(ConfigFlow, domain=DOMAIN):
             vol.Required("baudrate", default=38400): vol.All(
                 vol.Coerce(int), vol.Range(min=300, max=115200)
             ),
-            vol.Optional("mqtt", default=True): bool,
+            # vol.Optional("mqtt_enabled", default=True): bool,
         }
-        if mqtt_enabled:
-            schema_dict[vol.Required("topic", default=topic_value)] = str
+        # if self.mqtt_enabled:
+        #     schema_dict[vol.Required("mqtt_broker", default=self.mqtt_broker)] = str
+
+        #     schema_dict[vol.Required("mqtt_topic", default=self.mqtt_topic)] = str
 
         return self.async_show_form(
             step_id="user",
@@ -245,3 +264,16 @@ class TetraconnectConfigFlow(ConfigFlow, domain=DOMAIN):
             raise ValueError(
                 f"Manufacturer mismatch: {device_manufacturer} != {user_manufacturer}"
             )
+
+    # async def _check_mqtt_broker(self, mqtt_broker: str):
+    #     mqtt_ip: str = mqtt_broker.split(":")[0]
+    #     mqtt_port: int = int(mqtt_broker.split(":")[1]) if ":" in mqtt_broker else 1883
+    #     try:
+    #         await asyncio.wait_for(
+    #             asyncio.open_connection(mqtt_ip, mqtt_port),
+    #             timeout=2,
+    #         )
+    #     except (OSError, TimeoutError, asyncio.TimeoutError) as e:
+    #         raise ValueError(
+    #             f"MQTT broker {mqtt_broker}:{mqtt_port} is not reachable: {e}"
+    #         ) from e
