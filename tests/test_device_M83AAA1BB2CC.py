@@ -11,7 +11,7 @@ import threading
 import time
 
 # config
-SERIAL_PORT = "/dev/pts/5"
+SERIAL_PORT = "/dev/pts/2"
 BAUDRATE = 38400
 TIMEOUT = 1
 
@@ -31,7 +31,7 @@ messages = [
     # "\r\nOK\r\n",
     # "\r\nOK\r\n",
     # "\r\nOK\r\n",
-    # "\r\n+CTSDSR: 13,1234567,0,9876543,0,16\r\n8004\r\n",
+    "\r\n+CTSDSR: 13,1234567,0,9876543,0,16\r\n8003\r\n",
     # "\r\n+CTSDSR: 12,1234567,0,9876543,0,88\r\n0A30000",
     # "000000007FFE810\r\n",
     # "\r\n+CTSDSR: 12,1234567,0,9876543,0,88\r\n0A007264",
@@ -217,7 +217,7 @@ messages = [
     # "\r\n+CTSDSR: 12,637",
     # "7463,0,9876543,0,88\r\n0A0070F26264D4C927A820\r\n",
     # "\r",
-    "\n+CTSDSR: 12,1234567,0,9876543,0,88\r\n0A30000000000007FFE810\r\n",
+    # "\n+CTSDSR: 12,1234567,0,9876543,0,88\r\n0A30000000000007FFE810\r\n",
     # "\r\n+CTSDSR: 12,1320",
     # "520,0,9876543,0,88\r\n0A0070D78A64D5913AE820\r\n",
     # "\r\n+CTSDSR: 1",
@@ -592,11 +592,12 @@ messages = [
 
 
 # Frage-Antwort-Mapping (beliebig erweiterbar)
+# AT-Standard Responses: Query sollte mit Info DANN OK enden
 qa_map = {
     b"ATZ\r\n": b"\r\nOK\r\n",
-    b"AT+GMI?\r\n": b"\r\n+GMI: Motorola\r\n",
-    b"AT+GMM?\r\n": b"\r\n+GMM: 54009,M83AAA1BB2CC,91.2.0.0\r\n",
-    b"AT+GMR?\r\n": b"\r\n+GMR: R11.222.3333\r\n",
+    b"AT+GMI?\r\n": b"\r\n+GMI: Motorola\r\nOK\r\n",
+    b"AT+GMM?\r\n": b"\r\n+GMM: 54009,M83AAA1BB2CC,91.2.0.0\r\nOK\r\n",
+    b"AT+GMR?\r\n": b"\r\n+GMR: R11.222.3333\r\nOK\r\n",
     b"AT+CTSP=2,0\r\n": b"\r\nOK\r\n",
     b"AT+CTSP=2,1\r\n": b"\r\nOK\r\n",
     b"AT+CTSP=2,2\r\n": b"\r\nOK\r\n",

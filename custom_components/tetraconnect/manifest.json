@@ -8,6 +8,6 @@
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/moehrem/tetraconnect/issues",
-  "requirements": ["pyserial-asyncio"],
-  "version": "0.3.12"
+  "requirements": ["pyserial-asyncio-fast"],
+  "version": "0.5.0"
 }

@@ -17,6 +17,11 @@ PLATFORMS = [Platform.SENSOR]
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up tetraconnect from a config entry."""
     coordinator = TetraconnectCoordinator(hass, config_entry)
+    await coordinator.async_setup_handlers()
+
+    # set handler_module in data_handler to ensure it's available
+    coordinator.data_handler.handler_module = coordinator.handler_module
+
     # await coordinator.async_config_entry_first_refresh()
     await coordinator.async_start()
     hass.data[DOMAIN] = coordinator

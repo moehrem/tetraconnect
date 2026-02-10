@@ -1,7 +1,7 @@
 import serial
 import time
 
-port = "/dev/pts/10"
+port = "/dev/pts/1"
 ser = serial.Serial(port, 9600, timeout=1)
 
 time.sleep(1)  # kurz warten, bis Verbindung steht

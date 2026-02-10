@@ -5,20 +5,22 @@
           "user": {
             "title": "Einrichtung von tetraconnect",
             "description": "Bitte wähle den Hersteller des Funkgerätes. Wähle anschließend die Baudrate sowie den seriellen Port aus.",
-            "menu_options": {
+            "data": {
               "manufacturer": "Hersteller",
               "serial_port": "Serieller Port",
               "baudrate": "Baudrate",
-              "mqtt": "Eingehende Daten via MQTT veröffentlichen?",
-              "topic": "Topic"
+              "mqtt_enabled": "Eingehende Daten via MQTT veröffentlichen?",
+              "mqtt_topic": "Topic",
+              "mqtt_broker": "MQTT-Broker"
             }
-      },
+          }
+        },
       "error": {
         "timeout_error": "Angeschlossenes Gerät antwortet nicht.",
         "serial_error": "Fehler beim Zugriff auf den seriellen Port.",
-        "manufacturer_mismatch": "Gerät meldet einen anderen Hersteller als der ausgewählte.",
-        "unknown": "Unbekannter Fehler"
+        "manufacturer_mismatch": "Angegebener und ermittelter Hersteller sind unterschiedlich.",
+        "unknown": "Unbekannter Fehler, Protokolle für weitere Details prüfen.",
+        "mqtt_broker_error": "Fehler beim Verbinden zum MQTT-Broker."
       }
-    }
   }
 }
