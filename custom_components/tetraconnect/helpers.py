@@ -1,8 +1,17 @@
 """Several unils and tool helping handling of tetraconnect."""
 
+import importlib
 import logging
 
+from homeassistant.core import HomeAssistant
+
 _LOGGER = logging.getLogger(__name__)
+
+# Factory dictionary mapping manufacturer names to handler classes
+# This allows lookup without blocking import_module calls during async initialization
+# _MANUFACTURER_HANDLERS = {
+#     "motorola": Motorola,
+# }
 
 
 class TetraconnectHelpers:
@@ -11,9 +20,16 @@ class TetraconnectHelpers:
     def __init__(self, coordinator) -> None:
         """Initialize tetraconnectHelpers."""
         self.coordinator = coordinator
+        self.hass: HomeAssistant = coordinator.hass
+
+        self.manufacturer = coordinator.manufacturer
 
     def update_connection_status(self, status):
-        "Set connection status."
+        """Set connection status."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
         status_mapping = {
             1: "connected",
             2: "reconnecting",
@@ -21,6 +37,9 @@ class TetraconnectHelpers:
         }
 
         status_text = status_mapping.get(status, "unknown")
+        logger.debug(
+            "update_connection_status called with status=%d (%s)", status, status_text
+        )
 
         message = {
             "connection_status": {
@@ -29,61 +48,38 @@ class TetraconnectHelpers:
             }
         }
 
-        # sds_message = self.create_message(variables, messages)
-
         self.coordinator.async_set_updated_data(message)
 
-    def update_entities(
-        self,
-        data_dict: dict[str, str],
-    ) -> None:
-        """Create a message based on the given dictionary.
+    async def get_manufacturer_handler(self, manufacturer: str) -> object:
+        """Dynamically import and return the manufacturer-specific handler class based on manufacturer name, avoiding blocking the event loop."""
 
-        The first key will be the key of the message, and the rest will be the content. Finally
-        a HA entity will be created or updated with the message. The first key will be used as the entity ID.
+        module_name = f"custom_components.tetraconnect.{manufacturer.lower()}"
+        class_name = manufacturer.capitalize()
 
-        Args:
-            data_dict (dict[str, str]): Dictionary containing variables to compose to a HA entity message.
-
-        Raises:
-            TypeError: If data_dict is not a dictionary.
-            ValueError: If data_dict is empty or does not contain valid keys.
-
-        """
-        if not isinstance(data_dict, dict):
-            _LOGGER.error("Data must be a dictionary, got %s", type(data_dict))
-            raise TypeError("Data must be a dictionary")
-
-        if not data_dict:
-            _LOGGER.error("Data dictionary is empty")
-            raise ValueError("Data dictionary cannot be empty")
+        def import_handler(manufacturer: str):
+            module = importlib.import_module(
+                f"custom_components.tetraconnect.{manufacturer}"
+            )
+            return getattr(module, manufacturer.capitalize())
 
         try:
-            # Only include keys with non-empty, non-None, non-zero values
-            # message: dict[str, str] = {
-            #     k: v for k, v in data_dict.items() if v not in ("", 0, None)
-            # }
-
-            message: dict[str, str] = dict(data_dict)
-
-            if next(iter(message), None) != "sds_command":
-                first_key = next(iter(message), None)
-            else:
-                first_key = message["sds_command"]
-
-            if first_key is not None:
-                new_message = {first_key: message}
-                self.coordinator.async_set_updated_data(new_message)
-
-                _LOGGER.debug(
-                    "Updated entity with message %s for key %s",
-                    message,
-                    first_key,
-                )
-            else:
-                _LOGGER.error("No valid key found in message")
-        except (KeyError, TypeError, ValueError) as err:
+            handler_class = await self.hass.async_add_executor_job(
+                import_handler, manufacturer.lower()
+            )
+            self.handler_instance = handler_class(self)
+            return self.handler_instance
+        except ModuleNotFoundError:
+            _LOGGER.error("Manufacturer module not found: %s", module_name)
+            self.handler_instance = None
+        except AttributeError:
             _LOGGER.error(
-                "Error updating entity: %s",
+                "Handler class '%s' not found in module '%s'", class_name, module_name
+            )
+            self.handler_instance = None
+        except Exception as err:
+            _LOGGER.error(
+                "Could not instantiate handler class for '%s': %s",
+                self.manufacturer,
                 err,
             )
+            self.handler_instance = None
